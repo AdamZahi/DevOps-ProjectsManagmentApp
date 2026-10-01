@@ -1,0 +1,70 @@
+services:
+  db:
+    image: mysql:8.4
+    container_name: gestion-projets-db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: test_db
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: esprit
+      MYSQL_PASSWORD: esprit
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - gestion-projets-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gestion-projets-backend
+    restart: unless-stopped
+    environment:
+      # Override des propriétés Spring Boot via variables d'environnement
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/test_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: root
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      SPRING_JPA_SHOW_SQL: "false"
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy   # Attend que MySQL passe son healthcheck
+    networks:
+      - gestion-projets-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/entreprise/all || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: gestion-projets-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy   # Attend que le backend passe son healthcheck
+    networks:
+      - gestion-projets-net
+
+networks:
+  gestion-projets-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local

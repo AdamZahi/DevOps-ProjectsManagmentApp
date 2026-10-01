@@ -1,69 +1,85 @@
 pipeline {
     agent any
 
-    /* 
-     * Décommenter et adapter si des outils sont configurés dans 
-     * Jenkins -> Administrer Jenkins -> Gestion des outils (Global Tool Configuration)
+    /*
+     * Si les outils Maven / JDK / NodeJS sont configurés dans
+     * Jenkins -> Administrer Jenkins -> Gestion des outils, décommenter :
      *
      * tools {
-     *     maven 'Maven 3'
-     *     jdk 'JDK 17'
-     *     nodejs 'NodeJS'
+     *     maven  'Maven 3'
+     *     jdk    'JDK 21'
+     *     nodejs 'NodeJS 22'
      * }
      */
 
+    environment {
+        // Préfixe des images Docker (adapter selon Docker Hub ou registry privé)
+        IMAGE_BACKEND  = "gestion-projets-backend"
+        IMAGE_FRONTEND = "gestion-projets-frontend"
+        // Tag basé sur le numéro de build Jenkins (ex. :42) ou :latest
+        IMAGE_TAG = "${env.BUILD_NUMBER ?: 'latest'}"
+    }
+
     stages {
-        // Étape 1 : Récupération du code source depuis le dépôt Git
+
+        // ── 1. Récupération du code source ─────────────────────────────
         stage('Checkout SCM') {
             steps {
-                echo '=== Checkout SCM ==='
+                echo '=== [1/7] Checkout SCM ==='
                 checkout scm
             }
         }
 
-        // Étape 2 : Compilation et packaging du backend Spring Boot (sans exécuter les tests)
+        // ── 2. Build du backend (Maven, packaging JAR) ─────────────────
         stage('Build Backend') {
             steps {
-                echo '=== Building Backend (Maven) ==='
+                echo '=== [2/7] Build Backend (Maven) ==='
                 dir('backend') {
                     script {
                         if (isUnix()) {
-                            sh 'mvn clean package -DskipTests'
+                            sh 'mvn clean package -DskipTests -B'
                         } else {
-                            bat 'mvn clean package -DskipTests'
+                            bat 'mvn clean package -DskipTests -B'
                         }
                     }
                 }
             }
         }
 
-        // Étape 3 : Exécution des tests unitaires du backend
+        // ── 3. Tests unitaires du backend ──────────────────────────────
         stage('Test Backend') {
             steps {
-                echo '=== Running Backend Tests ==='
+                echo '=== [3/7] Test Backend (JUnit) ==='
                 dir('backend') {
                     script {
                         if (isUnix()) {
-                            sh 'mvn test'
+                            sh 'mvn test -B'
                         } else {
-                            bat 'mvn test'
+                            bat 'mvn test -B'
                         }
                     }
                 }
             }
+            post {
+                always {
+                    // Publier les résultats de tests dans l'interface Jenkins
+                    junit allowEmptyResults: true,
+                          testResults: 'backend/target/surefire-reports/*.xml'
+                }
+            }
         }
 
-        // Étape 4 : Installation des dépendances et compilation du frontend Angular
+        // ── 4. Build du frontend Angular ───────────────────────────────
         stage('Build Frontend') {
             steps {
-                echo '=== Building Frontend (Angular) ==='
+                echo '=== [4/7] Build Frontend (Angular) ==='
                 dir('frontend') {
                     script {
                         if (isUnix()) {
-                            sh 'npm install'
+                            sh 'npm ci --legacy-peer-deps'
                             sh 'npm run build'
                         } else {
-                            bat 'npm install'
+                            bat 'npm ci --legacy-peer-deps'
                             bat 'npm run build'
                         }
                     }
@@ -71,23 +87,81 @@ pipeline {
             }
         }
 
-        // Étape 5 : Archivage des artefacts générés pour le frontend
+        // ── 5. Archivage des artefacts frontend ────────────────────────
         stage('Archive Frontend Artifacts') {
             steps {
-                echo '=== Archiving Frontend Artifacts ==='
-                // Archive tous les fichiers produits dans le dossier dist du frontend
-                archiveArtifacts artifacts: 'frontend/dist/**', fingerprint: true, allowEmptyArchive: false
+                echo '=== [5/7] Archive Frontend Artifacts ==='
+                archiveArtifacts artifacts: 'frontend/dist/**',
+                                  fingerprint: true,
+                                  allowEmptyArchive: false
+            }
+        }
+
+        // ── 6. Build des images Docker ─────────────────────────────────
+        stage('Docker Build') {
+            steps {
+                echo '=== [6/7] Docker Build (backend + frontend) ==='
+                script {
+                    if (isUnix()) {
+                        sh """
+                            docker build -t ${IMAGE_BACKEND}:${IMAGE_TAG}  ./backend
+                            docker build -t ${IMAGE_FRONTEND}:${IMAGE_TAG} ./frontend
+                        """
+                    } else {
+                        bat """
+                            docker build -t %IMAGE_BACKEND%:%IMAGE_TAG%  backend
+                            docker build -t %IMAGE_FRONTEND%:%IMAGE_TAG% frontend
+                        """
+                    }
+                }
+            }
+        }
+
+        // ── 7. Déploiement via Docker Compose ──────────────────────────
+        stage('Docker Deploy') {
+            steps {
+                echo '=== [7/7] Docker Compose Up ==='
+                script {
+                    if (isUnix()) {
+                        sh '''
+                            docker compose down --remove-orphans || true
+                            docker compose up -d --build
+                        '''
+                    } else {
+                        bat '''
+                            docker compose down --remove-orphans || exit /b 0
+                            docker compose up -d --build
+                        '''
+                    }
+                }
             }
         }
     }
 
-    // Gestion des statuts post-exécution
+    // ── Post-exécution ────────────────────────────────────────────────
     post {
         success {
-            echo ' Pipeline Jenkins terminé avec succès !'
+            echo """
+            ──────────────────────────────────────────
+             Pipeline terminé avec succès !
+             Frontend  → http://localhost:80
+             Backend   → http://localhost:8080
+             Base de données → localhost:3306 / test_db
+            ──────────────────────────────────────────
+            """
         }
         failure {
-            echo ' Échec du pipeline Jenkins.'
+            echo ' Pipeline en échec — vérifier les logs ci-dessus.'
+        }
+        always {
+            // Afficher l'état des conteneurs en fin de pipeline
+            script {
+                if (isUnix()) {
+                    sh 'docker compose ps || true'
+                } else {
+                    bat 'docker compose ps || exit /b 0'
+                }
+            }
         }
     }
 }
