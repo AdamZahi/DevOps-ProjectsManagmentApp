@@ -28,7 +28,6 @@ services:
     container_name: gestion-projets-backend
     restart: unless-stopped
     environment:
-      # Override des propriétés Spring Boot via variables d'environnement
       SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/test_db?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true
       SPRING_DATASOURCE_USERNAME: root
       SPRING_DATASOURCE_PASSWORD: root
@@ -38,7 +37,7 @@ services:
       - "8080:8080"
     depends_on:
       db:
-        condition: service_healthy   # Attend que MySQL passe son healthcheck
+        condition: service_healthy
     networks:
       - gestion-projets-net
     healthcheck:
@@ -57,7 +56,15 @@ services:
       - "80:80"
     depends_on:
       backend:
-        condition: service_healthy   # Attend que le backend passe son healthcheck
+        condition: service_healthy
+    networks:
+      - gestion-projets-net
+  sonar:
+    image: sonarqube:latest
+    container_name: gestion-projets-sonarqube
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
     networks:
       - gestion-projets-net
 
